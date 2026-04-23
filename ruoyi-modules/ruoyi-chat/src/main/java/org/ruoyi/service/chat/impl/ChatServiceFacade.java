@@ -62,6 +62,8 @@ import org.ruoyi.service.knowledge.IKnowledgeInfoService;
 import org.ruoyi.service.retrieval.KnowledgeRetrievalService;
 import org.ruoyi.service.knowledge.retriever.CustomVectorRetriever;
 import org.ruoyi.service.vector.VectorStoreService;
+import org.ruoyi.agent.deepresearch.DeepResearchAgent;
+import org.ruoyi.agent.deepresearch.DeepResearchState;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -209,6 +211,11 @@ public class ChatServiceFacade implements IChatService {
            return handleThinkingMode(chatRequest);
         }
 
+        // 处理深度研究模式
+        if (chatRequest.getEnableDeepResearch()) {
+            return handleDeepResearchMode(chatRequest);
+        }
+
         return null;
     }
 
@@ -221,14 +228,16 @@ public class ChatServiceFacade implements IChatService {
     private SseEmitter handleThinkingMode(ChatRequest chatRequest) {
         // 配置监督者模型
         OpenAiChatModel plannerModel = OpenAiChatModel.builder()
-            .baseUrl(chatRequest.getChatModelVo().getApiHost())
+//            .baseUrl(chatRequest.getChatModelVo().getApiHost())
+            .baseUrl("https://open.bigmodel.cn/api/paas/v4")
             .apiKey(chatRequest.getChatModelVo().getApiKey())
             .modelName(chatRequest.getChatModelVo().getModelName())
             .build();
 
         // Bing 搜索 MCP 客户端
         McpTransport bingTransport = new StdioMcpTransport.Builder()
-            .command(List.of("C:\\Program Files\\nodejs\\npx.cmd", "-y", "bing-cn-mcp"))
+//            .command(List.of("C:\\Program Files\\nodejs\\npx.cmd", "-y", "bing-cn-mcp"))
+            .command(List.of("D:\\Program Files\\nodejs\\npx.cmd", "-y", "bing-cn-mcp"))
             .logEvents(true)
             .build();
 
@@ -240,7 +249,8 @@ public class ChatServiceFacade implements IChatService {
 
         // Playwright MCP 客户端 - 浏览器自动化工具
         McpTransport playwrightTransport = new StdioMcpTransport.Builder()
-            .command(List.of("C:\\Program Files\\nodejs\\npx.cmd", "-y", "@playwright/mcp@latest"))
+            // .command(List.of("C:\\Program Files\\nodejs\\npx.cmd", "-y", "@playwright/mcp@latest"))
+            .command(List.of("D:\\Program Files\\nodejs\\npx.cmd", "-y", "@playwright/mcp@latest"))
             .logEvents(true)
             .build();
 
@@ -253,7 +263,9 @@ public class ChatServiceFacade implements IChatService {
         // 允许 AI 读取、写入、搜索文件（基于当前项目根目录）
         String userDir = System.getProperty("user.dir");
         McpTransport filesystemTransport = new StdioMcpTransport.Builder()
-            .command(List.of("C:\\Program Files\\nodejs\\npx.cmd", "-y",
+            // .command(List.of("C:\\Program Files\\nodejs\\npx.cmd", "-y",
+            //     "@modelcontextprotocol/server-filesystem", userDir))
+            .command(List.of("D:\\Program Files\\nodejs\\npx.cmd", "-y",
                 "@modelcontextprotocol/server-filesystem", userDir))
             .logEvents(true)
 
@@ -266,8 +278,7 @@ public class ChatServiceFacade implements IChatService {
 
         // 合并三个 MCP 客户端的工具
         ToolProvider toolProvider = McpToolProvider.builder()
-            // bingMcpClient,
-            .mcpClients(List.of(playwrightMcpClient, filesystemMcpClient))
+            .mcpClients(List.of(bingMcpClient, playwrightMcpClient, filesystemMcpClient))
             .build();
 
         // ========== LangChain4j Skills 基本用法 ==========
@@ -341,6 +352,63 @@ public class ChatServiceFacade implements IChatService {
                 SseMessageUtils.completeConnection(userId, tokenValue);
             }
         });
+        return chatRequest.getEmitter();
+    }
+
+    /**
+     * 处理深度研究模式（Deep Research）
+     * 执行多轮搜索、阅读、评估的迭代研究流程
+     *
+     * @param chatRequest 聊天请求
+     * @return SseEmitter
+     */
+    private SseEmitter handleDeepResearchMode(ChatRequest chatRequest) {
+        Long userId = chatRequest.getUserId();
+        String tokenValue = chatRequest.getTokenValue();
+
+        log.info("启动深度研究模式，用户: {}, 问题: {}", userId, chatRequest.getContent());
+
+        // 异步执行深度研究
+        CompletableFuture.runAsync(() -> {
+            try {
+                // 创建深度研究状态
+                DeepResearchState researchState = new DeepResearchState(
+                    chatRequest.getEmitter(),
+                    userId,
+                    tokenValue
+                );
+
+                // 创建深度研究 Agent
+                DeepResearchAgent researchAgent = new DeepResearchAgent();
+
+                // 执行深度研究
+                String result = researchAgent.execute(
+                    chatRequest.getContent(),
+                    chatRequest.getChatModelVo(),
+                    researchState
+                );
+
+                // 发送结果
+                SseMessageUtils.sendContent(userId, result);
+                SseMessageUtils.sendDone(userId);
+
+                // 保存消息
+                chatMessageService.saveChatMessage(
+                    userId,
+                    chatRequest.getSessionId(),
+                    result,
+                    RoleType.ASSISTANT.getName(),
+                    chatRequest.getModel()
+                );
+
+            } catch (Exception e) {
+                log.error("深度研究执行失败", e);
+                SseMessageUtils.sendError(userId, "深度研究执行失败: " + e.getMessage());
+            } finally {
+                SseMessageUtils.completeConnection(userId, tokenValue);
+            }
+        });
+
         return chatRequest.getEmitter();
     }
 

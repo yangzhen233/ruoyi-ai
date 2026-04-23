@@ -80,6 +80,11 @@ public class ChatRequest {
     private Boolean enableThinking = false;
 
     /**
+     * 是否启用深度研究模式（Deep Research）
+     */
+    private Boolean enableDeepResearch = false;
+
+    /**
      * 对话模型详情
      */
     private ChatModelVo chatModelVo;
