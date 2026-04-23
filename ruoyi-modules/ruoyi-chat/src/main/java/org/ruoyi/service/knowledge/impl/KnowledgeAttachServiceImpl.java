@@ -37,8 +37,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.InputStream;
-
-import java.net.URL;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -167,7 +165,7 @@ public class KnowledgeAttachServiceImpl implements IKnowledgeAttachService {
             Long knowledgeId = attach.getKnowledgeId();
             String docId = attach.getDocId();
 
-            // 获取文件信息并下载
+            // 获取文件信息
             List<OssDTO> ossDTOs = ossService.selectByIds(String.valueOf(attach.getOssId()));
             if (ossDTOs == null || ossDTOs.isEmpty()) {
                 throw new RuntimeException("未找到对应的 OSS 文件信息");
@@ -175,7 +173,8 @@ public class KnowledgeAttachServiceImpl implements IKnowledgeAttachService {
             OssDTO ossDTO = ossDTOs.get(0);
             String content;
             ResourceLoader resourceLoader = resourceLoaderFactory.getLoaderByFileType(attach.getType());
-            try (InputStream inputStream = new URL(ossDTO.getUrl()).openStream()) {
+            // 直接使用 OssService 获取文件流，避免预签名URL过期问题
+            try (InputStream inputStream = ossService.getInputStreamById(attach.getOssId())) {
                 content = resourceLoader.getContent(inputStream);
             }
             List<String> chunkList = resourceLoader.getChunkList(content, String.valueOf(knowledgeId));

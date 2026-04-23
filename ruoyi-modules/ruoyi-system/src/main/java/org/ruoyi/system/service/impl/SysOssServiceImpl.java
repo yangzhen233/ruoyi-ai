@@ -45,6 +45,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -390,5 +391,26 @@ public class SysOssServiceImpl implements ISysOssService, OssService {
             throw new ServiceException("请先配置Qwen上传文件相关API_HOST");
         }
         API_HOST = apiHost;
+    }
+
+    /**
+     * 根据ossId获取文件输入流
+     * 直接使用OssClient下载，避免预签名URL过期问题
+     *
+     * @param ossId ossId
+     * @return 文件输入流
+     */
+    @Override
+    public InputStream getInputStreamById(Long ossId) {
+        SysOssVo sysOss = SpringUtils.getAopProxy(this).getById(ossId);
+        if (ObjectUtil.isNull(sysOss)) {
+            throw new ServiceException("文件数据不存在!");
+        }
+        OssClient storage = OssFactory.instance(sysOss.getService());
+        try {
+            return storage.getObjectContent(sysOss.getFileName());
+        } catch (IOException e) {
+            throw new ServiceException("获取文件流失败: " + e.getMessage());
+        }
     }
 }

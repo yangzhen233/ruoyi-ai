@@ -3,6 +3,7 @@ package org.ruoyi.common.core.service;
 import org.ruoyi.common.core.domain.dto.OssDTO;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.InputStream;
 import java.util.List;
 
 /**
@@ -33,5 +34,12 @@ public interface OssService {
      */
     OssDTO uploadFile(MultipartFile file);
 
+    /**
+     * 根据ossId获取文件输入流
+     *
+     * @param ossId ossId
+     * @return 文件输入流
+     */
+    InputStream getInputStreamById(Long ossId);
 
 }
