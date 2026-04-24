@@ -25,6 +25,7 @@ public class DeepResearchState {
     private List<InformationPiece> collectedInfo = new ArrayList<>();
     private EvaluationResult evaluation;
     private String decision;
+    private String directAnswer;  // 简单问题的直接回答
 
     private SseEmitter sseEmitter;
     private Long userId;
@@ -90,11 +91,14 @@ public class DeepResearchState {
     }
 
     public String getCollectedInfoSummary() {
+        if (collectedInfo == null || collectedInfo.isEmpty()) {
+            return "暂无收集信息";
+        }
         StringBuilder sb = new StringBuilder();
         for (InformationPiece info : collectedInfo) {
-            sb.append("来源: ").append(info.getSourceTitle()).append("\n");
-            sb.append("URL: ").append(info.getSourceUrl()).append("\n");
-            sb.append("内容: ").append(info.getContent()).append("\n");
+            sb.append("来源: ").append(info.getSourceTitle() != null ? info.getSourceTitle() : "未知").append("\n");
+            sb.append("URL: ").append(info.getSourceUrl() != null ? info.getSourceUrl() : "无").append("\n");
+            sb.append("内容: ").append(info.getContent() != null ? info.getContent() : "无").append("\n");
             sb.append("---\n");
         }
         return sb.toString();
