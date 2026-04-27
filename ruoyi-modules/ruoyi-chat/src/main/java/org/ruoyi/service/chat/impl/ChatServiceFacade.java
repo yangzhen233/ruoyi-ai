@@ -12,6 +12,7 @@ import dev.langchain4j.mcp.client.DefaultMcpClient;
 import dev.langchain4j.mcp.client.McpClient;
 import dev.langchain4j.mcp.client.transport.McpTransport;
 import dev.langchain4j.mcp.client.transport.stdio.StdioMcpTransport;
+import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
@@ -57,6 +58,7 @@ import org.ruoyi.mcp.service.core.ToolProviderFactory;
 import org.ruoyi.observability.*;
 import org.ruoyi.service.chat.AbstractChatService;
 import org.ruoyi.service.chat.IChatMessageService;
+import org.ruoyi.service.chat.impl.memory.ChatMemoryFactory;
 import org.ruoyi.service.chat.impl.memory.PersistentChatMemoryStore;
 import org.ruoyi.service.knowledge.IKnowledgeInfoService;
 import org.ruoyi.service.retrieval.KnowledgeRetrievalService;
@@ -88,8 +90,6 @@ import java.util.concurrent.ConcurrentHashMap;
 @RequiredArgsConstructor
 public class ChatServiceFacade implements IChatService {
 
-    private static final Integer DEFAULT_MAX_MESSAGES = 20;
-
     private final IChatModelService chatModelService;
 
     private final ChatServiceFactory chatServiceFactory;
@@ -108,11 +108,13 @@ public class ChatServiceFacade implements IChatService {
 
     private final ToolProviderFactory toolProviderFactory;
 
+    private final ChatMemoryFactory chatMemoryFactory;
+
     /**
      * 内存实例缓存，避免同一会话重复创建
-     * Key: sessionId, Value: MessageWindowChatMemory实例
+     * Key: sessionId, Value: ChatMemory实例
      */
-    private static final Map<Object, MessageWindowChatMemory> memoryCache = new ConcurrentHashMap<>();
+    private static final Map<Object, ChatMemory> memoryCache = new ConcurrentHashMap<>();
 
 
 
@@ -208,7 +210,7 @@ public class ChatServiceFacade implements IChatService {
         }
         // 处理思考模式
         if (chatRequest.getEnableThinking()) {
-           return handleThinkingMode(chatRequest);
+           return handleDeepResearchMode(chatRequest);
         }
 
         // 处理深度研究模式
@@ -464,23 +466,52 @@ public class ChatServiceFacade implements IChatService {
      * 同一个会话ID会返回同一个内存实例，避免重复创建和消息丢失
      *
      * @param memoryId 内存ID（会话ID）
-     * @return MessageWindowChatMemory实例
+     * @param model    模型配置
+     * @return ChatMemory实例
      */
-    private MessageWindowChatMemory createChatMemory(Object memoryId) {
+    private ChatMemory createChatMemory(Object memoryId, ChatModelVo model) {
         // 先从缓存中获取
         return memoryCache.computeIfAbsent(memoryId, key -> {
             try {
-                PersistentChatMemoryStore store = new PersistentChatMemoryStore(chatMessageService);
-                return MessageWindowChatMemory.builder()
-                    .id(memoryId)
-                    .maxMessages(DEFAULT_MAX_MESSAGES)
-                    .chatMemoryStore(store)
-                    .build();
+                return chatMemoryFactory.create(memoryId, model);
             } catch (Exception e) {
                 log.warn("创建聊天内存失败: {}", e.getMessage());
                 return null;
             }
         });
+    }
+
+    /**
+     * 创建或获取聊天内存实例（兼容旧方法，使用默认模型配置）
+     *
+     * @param memoryId 内存ID（会话ID）
+     * @return ChatMemory实例
+     * @deprecated 建议使用 {@link #createChatMemory(Object, ChatModelVo)} 以支持基于 Token 的内存管理
+     */
+    @Deprecated
+    private ChatMemory createChatMemory(Object memoryId) {
+        log.warn("使用了已废弃的 createChatMemory(Object) 方法，建议传入模型配置以启用 Token 窗口管理");
+        return createChatMemory(memoryId, null);
+    }
+
+    /**
+     * 创建固定消息数的聊天内存（原有实现）
+     * 保留此方法以兼容旧代码，但建议使用新的 Token 窗口管理
+     *
+     * @param memoryId 内存ID（会话ID）
+     * @param maxMessages 最大消息数（默认20）
+     * @return MessageWindowChatMemory实例
+     * @deprecated 建议使用 {@link ChatMemoryFactory#create(Object, ChatModelVo)} 以支持基于 Token 的内存管理
+     */
+    @Deprecated
+    private MessageWindowChatMemory createFixedMessageMemory(Object memoryId, int maxMessages) {
+        log.info("使用固定消息数内存管理（已废弃）: maxMessages={}", maxMessages);
+        PersistentChatMemoryStore store = new PersistentChatMemoryStore(chatMessageService);
+        return MessageWindowChatMemory.builder()
+            .id(memoryId)
+            .maxMessages(maxMessages)
+            .chatMemoryStore(store)
+            .build();
     }
 
 
@@ -530,7 +561,7 @@ public class ChatServiceFacade implements IChatService {
 
         // 3. 从数据库查询历史对话消息（放在前面）
         if (chatRequest.getSessionId() != null) {
-            MessageWindowChatMemory memory = createChatMemory(chatRequest.getSessionId());
+            ChatMemory memory = createChatMemory(chatRequest.getSessionId(), chatRequest.getChatModelVo());
             if (memory != null) {
                 List<ChatMessage> historicalMessages = memory.messages();
                 if (historicalMessages != null && !historicalMessages.isEmpty()) {
