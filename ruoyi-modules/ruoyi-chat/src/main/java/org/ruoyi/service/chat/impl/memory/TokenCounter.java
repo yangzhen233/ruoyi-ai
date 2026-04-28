@@ -77,7 +77,7 @@ public class TokenCounter {
         tokens += countTokens(getRoleName(message));
 
         // 消息内容
-        tokens += countTokens(message.text());
+        tokens += countTokens(extractText(message));
 
         // 名称字段（如果有）
         if (message instanceof UserMessage userMessage && userMessage.name() != null) {
@@ -85,6 +85,22 @@ public class TokenCounter {
         }
 
         return tokens;
+    }
+
+    /**
+     * 从消息中提取文本内容
+     */
+    private String extractText(ChatMessage message) {
+        if (message instanceof AiMessage aiMessage) {
+            return aiMessage.text();
+        } else if (message instanceof UserMessage userMessage) {
+            return userMessage.singleText();
+        } else if (message instanceof SystemMessage systemMessage) {
+            return systemMessage.text();
+        } else if (message instanceof ToolExecutionResultMessage toolMessage) {
+            return toolMessage.text();
+        }
+        return "";
     }
 
     /**

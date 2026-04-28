@@ -1,7 +1,10 @@
 package org.ruoyi.service.chat.impl.memory;
 
+import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
+import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.store.memory.chat.ChatMemoryStore;
@@ -49,7 +52,12 @@ public class TokenBasedChatMemory implements ChatMemory {
     private final boolean summarizeEnabled;
 
     /**
-     * 触发摘要的消息数量阈值
+     * 触发摘要的 Token 使用比例（如 0.7 表示 70%）
+     */
+    private final double summarizeTokenRatio;
+
+    /**
+     * 触发摘要的消息数量阈值（避免消息太少时摘要无意义）
      */
     private final int summarizeThreshold;
 
@@ -77,6 +85,7 @@ public class TokenBasedChatMemory implements ChatMemory {
         this.tokenCounter = builder.tokenCounter != null ? builder.tokenCounter : new TokenCounter();
         this.store = builder.store;
         this.summarizeEnabled = builder.summarizeEnabled;
+        this.summarizeTokenRatio = builder.summarizeTokenRatio;
         this.summarizeThreshold = builder.summarizeThreshold;
         this.summarizer = builder.summarizer;
         this.preserveSystemMessages = builder.preserveSystemMessages;
@@ -106,6 +115,10 @@ public class TokenBasedChatMemory implements ChatMemory {
         int totalTokens = tokenCounter.countMessages(messages);
         int effectiveMaxTokens = maxTokens - reservedForReply;
 
+        // 输出当前状态日志
+        log.info("[Token内存管理] 会话={}, 消息数={}, 当前Token={}, Token上限={}, 预留回复空间={}",
+                memoryId, messages.size(), totalTokens, maxTokens, reservedForReply);
+
         // 未超限，直接返回
         if (totalTokens <= effectiveMaxTokens) {
             log.debug("Token 数量 {} 在限制 {} 内，无需处理", totalTokens, effectiveMaxTokens);
@@ -115,7 +128,13 @@ public class TokenBasedChatMemory implements ChatMemory {
         log.info("Token 数量 {} 超过限制 {}，开始处理", totalTokens, effectiveMaxTokens);
 
         // 尝试摘要压缩
-        if (summarizeEnabled && summarizer != null && messages.size() > summarizeThreshold) {
+        // 条件: 1. 启用摘要 2. 有摘要模型 3. 消息数足够 4. Token 使用超过阈值比例
+        boolean shouldSummarize = summarizeEnabled
+                && summarizer != null
+                && messages.size() > summarizeThreshold
+                && shouldTriggerSummarize(totalTokens, effectiveMaxTokens);
+
+        if (shouldSummarize) {
             messages = summarizeOldMessages(messages);
             totalTokens = tokenCounter.countMessages(messages);
 
@@ -126,10 +145,26 @@ public class TokenBasedChatMemory implements ChatMemory {
         }
 
         // 按 Token 截断
+        int originalSize = messages.size();
         messages = truncateByTokens(messages, effectiveMaxTokens);
-        log.info("截断后消息数: {}, Token 数: {}", messages.size(), tokenCounter.countMessages(messages));
+        log.info("[Token截断] 原消息数={} → 截断后={}, Token: {} → {}",
+                originalSize, messages.size(), totalTokens, tokenCounter.countMessages(messages));
 
         return messages;
+    }
+
+    /**
+     * 判断是否应该触发摘要
+     * 基于 Token 使用比例判断，而非仅靠消息数量
+     */
+    private boolean shouldTriggerSummarize(int currentTokens, int maxTokens) {
+        double usageRatio = (double) currentTokens / maxTokens;
+        boolean shouldTrigger = usageRatio >= summarizeTokenRatio;
+        log.info("[摘要触发判断] Token使用比例: {}%, 触发阈值: {}%, 是否触发: {}",
+                String.format("%.1f", usageRatio * 100),
+                String.format("%.1f", summarizeTokenRatio * 100),
+                shouldTrigger);
+        return shouldTrigger;
     }
 
     /**
@@ -137,6 +172,7 @@ public class TokenBasedChatMemory implements ChatMemory {
      */
     private List<ChatMessage> summarizeOldMessages(List<ChatMessage> messages) {
         if (summarizer == null) {
+            log.debug("摘要模型未配置，跳过摘要");
             return messages;
         }
 
@@ -155,6 +191,7 @@ public class TokenBasedChatMemory implements ChatMemory {
 
             // 如果普通消息太少，不进行摘要
             if (regularMessages.size() < summarizeThreshold) {
+                log.debug("消息数 {} 小于阈值 {}，跳过摘要", regularMessages.size(), summarizeThreshold);
                 return messages;
             }
 
@@ -163,29 +200,50 @@ public class TokenBasedChatMemory implements ChatMemory {
             List<ChatMessage> toSummarize = regularMessages.subList(0, summarizeCount);
             List<ChatMessage> toKeep = regularMessages.subList(summarizeCount, regularMessages.size());
 
+            log.info("[摘要压缩] 开始摘要: 原消息数={}, 待摘要={}, 保留={}",
+                    messages.size(), summarizeCount, toKeep.size());
+
             // 构建摘要提示
             StringBuilder summaryPrompt = new StringBuilder();
             summaryPrompt.append("请用简洁的语言总结以下对话的关键信息，保留重要的上下文和用户偏好：\n\n");
 
             for (ChatMessage msg : toSummarize) {
-                summaryPrompt.append(msg.text()).append("\n");
+                summaryPrompt.append(extractText(msg)).append("\n");
             }
 
             // 调用 LLM 生成摘要
             String summary = summarizer.chat(summaryPrompt.toString());
-            log.info("生成摘要: {}...", summary.substring(0, Math.min(100, summary.length())));
+            log.info("[摘要压缩] 生成摘要成功: {}...", summary.substring(0, Math.min(100, summary.length())));
 
             // 构建新的消息列表
             List<ChatMessage> result = new ArrayList<>(systemMessages);
             result.add(SystemMessage.from("【历史对话摘要】" + summary));
             result.addAll(toKeep);
 
+            log.info("[摘要压缩] 完成: 原消息数={} → 新消息数={}", messages.size(), result.size());
+
             return result;
 
         } catch (Exception e) {
-            log.warn("摘要生成失败: {}", e.getMessage());
+            log.warn("[摘要压缩] 失败: {}", e.getMessage());
             return messages;
         }
+    }
+
+    /**
+     * 从消息中提取文本内容
+     */
+    private String extractText(ChatMessage message) {
+        if (message instanceof AiMessage aiMessage) {
+            return aiMessage.text();
+        } else if (message instanceof UserMessage userMessage) {
+            return userMessage.singleText();
+        } else if (message instanceof SystemMessage systemMessage) {
+            return systemMessage.text();
+        } else if (message instanceof ToolExecutionResultMessage toolMessage) {
+            return toolMessage.text();
+        }
+        return "";
     }
 
     /**
@@ -282,7 +340,8 @@ public class TokenBasedChatMemory implements ChatMemory {
         private TokenCounter tokenCounter;
         private ChatMemoryStore store;
         private boolean summarizeEnabled = false;
-        private int summarizeThreshold = 30;
+        private double summarizeTokenRatio = 0.7;
+        private int summarizeThreshold = 10;
         private ChatModel summarizer;
         private boolean preserveSystemMessages = true;
         private int reservedForReply = 2000;
@@ -309,6 +368,11 @@ public class TokenBasedChatMemory implements ChatMemory {
 
         public Builder summarizeEnabled(boolean summarizeEnabled) {
             this.summarizeEnabled = summarizeEnabled;
+            return this;
+        }
+
+        public Builder summarizeTokenRatio(double summarizeTokenRatio) {
+            this.summarizeTokenRatio = summarizeTokenRatio;
             return this;
         }
 

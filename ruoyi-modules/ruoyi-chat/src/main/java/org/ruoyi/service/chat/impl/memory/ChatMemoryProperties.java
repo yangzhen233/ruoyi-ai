@@ -2,17 +2,15 @@ package org.ruoyi.service.chat.impl.memory;
 
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.stereotype.Component;
 
 /**
  * 聊天长期记忆配置属性
  * 支持通过 application.yml 配置长期记忆行为
  *
- * @author yang
- * @date 2026-04-27
+ * @author ageerle@163.com
+ * @date 2026/01/10
  */
 @Data
-@Component
 @ConfigurationProperties(prefix = "chat.memory")
 public class ChatMemoryProperties {
 
@@ -66,10 +64,18 @@ public class ChatMemoryProperties {
     private Boolean summarizeEnabled = false;
 
     /**
-     * 摘要触发阈值 - 消息数量（默认 30）
-     * 当消息数超过此值时，对旧消息进行摘要
+     * 摘要触发阈值 - Token 使用比例（默认 0.7，即 70%）
+     * 当 Token 使用量超过此比例时，对旧消息进行摘要
+     * 例如: maxTokens=128000, 比例=0.7, 则 Token>89600 时触发摘要
+     * 建议值: 0.6-0.8 (60%-80%)
      */
-    private Integer summarizeThreshold = 30;
+    private Double summarizeTokenRatio = 0.7;
+
+    /**
+     * 摘要触发阈值 - 消息数量（默认 10）
+     * 当消息数超过此值时才考虑摘要（避免消息太少时摘要无意义）
+     */
+    private Integer summarizeThreshold = 10;
 
     /**
      * 是否保留系统消息（默认 true）
@@ -93,6 +99,19 @@ public class ChatMemoryProperties {
     private Integer maxConcurrentMemories = 100;
 
     /**
+     * 未知模型是否回退到消息数量策略（默认启用）
+     * 当模型不在 Token 限制列表中时，自动使用固定消息数量策略
+     * 关闭后，未知模型将使用默认 Token 限制 (4096)
+     */
+    private Boolean fallbackToMessageStrategy = true;
+
+    /**
+     * 未知模型回退时的消息数量（默认20）
+     * 仅当 fallbackToMessageStrategy=true 时生效
+     */
+    private Integer fallbackMaxMessages = 20;
+
+    /**
      * 获取格式化的配置信息
      */
     @Override
@@ -106,11 +125,14 @@ public class ChatMemoryProperties {
                 ", persistenceEnabled=" + persistenceEnabled +
                 ", autoCleanupDays=" + autoCleanupDays +
                 ", summarizeEnabled=" + summarizeEnabled +
+                ", summarizeTokenRatio=" + summarizeTokenRatio +
                 ", summarizeThreshold=" + summarizeThreshold +
                 ", preserveSystemMessages=" + preserveSystemMessages +
                 ", debugLoggingEnabled=" + debugLoggingEnabled +
                 ", queryTimeoutMs=" + queryTimeoutMs +
                 ", maxConcurrentMemories=" + maxConcurrentMemories +
+                ", fallbackToMessageStrategy=" + fallbackToMessageStrategy +
+                ", fallbackMaxMessages=" + fallbackMaxMessages +
                 '}';
     }
 }

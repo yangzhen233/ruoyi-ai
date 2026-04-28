@@ -53,6 +53,19 @@ public class ChatMemoryFactory {
         String strategy = properties.getStrategy();
         log.info("创建 ChatMemory: strategy={}, memoryId={}", strategy, memoryId);
 
+        // 检查模型是否已知，未知模型回退到消息数量策略
+        if (Boolean.TRUE.equals(properties.getFallbackToMessageStrategy())
+                && ("token".equalsIgnoreCase(strategy) || "hybrid".equalsIgnoreCase(strategy))) {
+            if (model != null && model.getModelName() != null) {
+                int tokenLimit = ModelTokenLimits.getLimitOrUnknown(model.getModelName());
+                if (tokenLimit == ModelTokenLimits.UNKNOWN_LIMIT) {
+                    log.info("模型 [{}] 不在已知列表中，回退到固定消息数量策略 (maxMessages={})",
+                            model.getModelName(), properties.getFallbackMaxMessages());
+                    return createFallbackMessageMemory(memoryId);
+                }
+            }
+        }
+
         return switch (strategy.toLowerCase()) {
             case "message" -> createMessageBasedMemory(memoryId);
             case "token" -> createTokenBasedMemory(memoryId, model, summarizer);
@@ -79,20 +92,44 @@ public class ChatMemoryFactory {
     }
 
     /**
+     * 创建回退的消息数量内存（用于未知模型）
+     */
+    private ChatMemory createFallbackMessageMemory(Object memoryId) {
+        int maxMessages = properties.getFallbackMaxMessages() != null
+                ? properties.getFallbackMaxMessages()
+                : 20;
+        log.debug("创建回退消息窗口内存: maxMessages={}", maxMessages);
+
+        return MessageWindowChatMemory.builder()
+            .id(memoryId)
+            .maxMessages(maxMessages)
+            .chatMemoryStore(persistentStore)
+            .build();
+    }
+
+    /**
      * 创建基于 Token 的内存
      */
     private ChatMemory createTokenBasedMemory(Object memoryId, ChatModelVo model, ChatModel summarizer) {
         int maxTokens = resolveMaxTokens(model);
         int reservedForReply = properties.getReservedForReply();
+        boolean summarizeEnabled = properties.getSummarizeEnabled() && summarizer != null;
+        double summarizeTokenRatio = properties.getSummarizeTokenRatio() != null
+                ? properties.getSummarizeTokenRatio() : 0.7;
 
-        log.debug("创建 Token 窗口内存: maxTokens={}, reservedForReply={}", maxTokens, reservedForReply);
+        log.info("[Token内存] 创建Token窗口内存: maxTokens={}, reservedForReply={}, 模型={}, 摘要启用={}, 摘要触发比例={}",
+                maxTokens, reservedForReply, model != null ? model.getModelName() : "未知",
+                summarizeEnabled, summarizeTokenRatio);
 
         return TokenBasedChatMemory.builder()
             .memoryId(memoryId)
             .maxTokens(maxTokens)
             .tokenCounter(tokenCounter)
             .store(persistentStore)
-            .summarizeEnabled(false)
+            .summarizeEnabled(summarizeEnabled)
+            .summarizeTokenRatio(summarizeTokenRatio)
+            .summarizeThreshold(properties.getSummarizeThreshold())
+            .summarizer(summarizer)
             .preserveSystemMessages(properties.getPreserveSystemMessages())
             .reservedForReply(reservedForReply)
             .build();
@@ -105,10 +142,12 @@ public class ChatMemoryFactory {
         int maxTokens = resolveMaxTokens(model);
         int reservedForReply = properties.getReservedForReply();
         boolean summarizeEnabled = properties.getSummarizeEnabled() && summarizer != null;
+        double summarizeTokenRatio = properties.getSummarizeTokenRatio() != null
+                ? properties.getSummarizeTokenRatio() : 0.7;
         int summarizeThreshold = properties.getSummarizeThreshold();
 
-        log.debug("创建混合策略内存: maxTokens={}, summarizeEnabled={}, summarizeThreshold={}",
-            maxTokens, summarizeEnabled, summarizeThreshold);
+        log.info("[Hybrid内存] 创建混合策略内存: maxTokens={}, summarizeEnabled={}, summarizeTokenRatio={}, summarizeThreshold={}",
+            maxTokens, summarizeEnabled, summarizeTokenRatio, summarizeThreshold);
 
         return TokenBasedChatMemory.builder()
             .memoryId(memoryId)
@@ -116,6 +155,7 @@ public class ChatMemoryFactory {
             .tokenCounter(tokenCounter)
             .store(persistentStore)
             .summarizeEnabled(summarizeEnabled)
+            .summarizeTokenRatio(summarizeTokenRatio)
             .summarizeThreshold(summarizeThreshold)
             .summarizer(summarizer)
             .preserveSystemMessages(properties.getPreserveSystemMessages())

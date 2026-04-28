@@ -137,13 +137,15 @@ public class ChatServiceFacade implements IChatService {
             throw new IllegalArgumentException("模型不存在: " + chatRequest.getModel());
         }
 
+        // 先设置 chatModelVo，以便 buildContextMessages 中创建摘要模型时能获取到配置
+        chatRequest.setChatModelVo(chatModelVo);
+
         // 2. 构建上下文消息列表
         List<ChatMessage> contextMessages = buildContextMessages(chatRequest);
 
         chatRequest.setEmitter(emitter);
         chatRequest.setUserId(userId);
         chatRequest.setTokenValue(tokenValue);
-        chatRequest.setChatModelVo(chatModelVo);
         chatRequest.setContextMessages(contextMessages);
 
         // 保存用户消息
@@ -473,12 +475,103 @@ public class ChatServiceFacade implements IChatService {
         // 先从缓存中获取
         return memoryCache.computeIfAbsent(memoryId, key -> {
             try {
-                return chatMemoryFactory.create(memoryId, model);
+                // 创建摘要模型（用于 hybrid 策略）
+                ChatModel summarizer = createSummarizerModel(model);
+                return chatMemoryFactory.create(memoryId, model, summarizer);
             } catch (Exception e) {
                 log.warn("创建聊天内存失败: {}", e.getMessage());
                 return null;
             }
         });
+    }
+
+    /**
+     * 创建用于摘要的 LLM 模型
+     * 使用轻量级模型进行摘要，降低成本
+     * 通过智能映射自动选择合适的摘要模型
+     *
+     * @param model 原始模型配置
+     * @return 摘要模型实例，如果无法创建则返回 null
+     */
+    private ChatModel createSummarizerModel(ChatModelVo model) {
+        log.info("[摘要模型] 开始创建，model={}, apiKey={}, apiHost={}",
+                model != null ? model.getModelName() : "null",
+                model != null && model.getApiKey() != null ? "已配置" : "null",
+                model != null && model.getApiHost() != null ? model.getApiHost() : "null");
+
+        if (model == null || model.getApiKey() == null || model.getApiHost() == null) {
+            log.warn("[摘要模型] 创建失败：缺少必要参数");
+            return null;
+        }
+        try {
+            String originalModel = model.getModelName();
+            String summarizerModelName = getSmartSummarizerModel(originalModel);
+            String baseUrl = model.getApiHost();
+
+            // 修正智谱 API 地址（OpenAI 兼容格式需要完整路径）
+            if (originalModel != null && originalModel.toLowerCase().contains("glm")) {
+                if (!baseUrl.contains("/api/paas") && !baseUrl.contains("/v4")) {
+                    // 确保地址以 / 结尾
+                    baseUrl = baseUrl.endsWith("/") ? baseUrl : baseUrl + "/";
+                    baseUrl = baseUrl + "api/paas/v4/";
+                    log.info("[摘要模型] 修正智谱 API 地址: {} → {}", model.getApiHost(), baseUrl);
+                }
+            }
+
+            log.info("[摘要模型] 智能映射: {} → {}", originalModel, summarizerModelName);
+
+            return OpenAiChatModel.builder()
+                .baseUrl(baseUrl)
+                .apiKey(model.getApiKey())
+                .modelName(summarizerModelName)
+                .timeout(java.time.Duration.ofSeconds(60))  // 摘要需要较长超时时间
+                .build();
+        } catch (Exception e) {
+            log.warn("[摘要模型] 创建异常: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 智能映射摘要模型
+     * 根据原模型自动选择性价比高的轻量级模型
+     *
+     * @param originalModel 原始模型名称
+     * @return 摘要模型名称
+     */
+    private String getSmartSummarizerModel(String originalModel) {
+        if (originalModel == null || originalModel.isEmpty()) {
+            return originalModel;
+        }
+
+        String model = originalModel.toLowerCase();
+
+        // GLM 系列 → flash（智谱最便宜，有免费额度）
+        if (model.contains("glm-5")) return "glm-5-flash";
+        if (model.contains("glm-4.5")) return "glm-4.5-air";
+        if (model.contains("glm-4")) return "glm-4-flash";
+
+        // GPT 系列 → mini
+        if (model.contains("gpt-4")) return "gpt-4o-mini";
+        if (model.contains("gpt-3.5")) return "gpt-3.5-turbo";
+
+        // Claude 系列 → haiku
+        if (model.contains("claude")) return "claude-3-5-haiku";
+
+        // Gemini → flash
+        if (model.contains("gemini")) return "gemini-2.0-flash";
+
+        // DeepSeek 本身便宜，保持原模型
+        if (model.contains("deepseek")) return originalModel;
+
+        // Qwen → turbo
+        if (model.contains("qwen")) return "qwen-turbo";
+
+        // Doubao → lite
+        if (model.contains("doubao")) return "doubao-1.5-lite";
+
+        // 其他模型保持原样
+        return originalModel;
     }
 
     /**

@@ -320,7 +320,7 @@ chat:
     # 是否启用长期记忆
     enabled: true
     # 内存管理策略: message(固定消息数) / token(Token窗口) / hybrid(Token+摘要)
-    strategy: token
+    strategy: hybrid
     # message策略时的消息数上限
     max-messages: 20
     # token策略时的最大Token数(null则根据模型自动获取)
@@ -330,8 +330,10 @@ chat:
     # 是否启用消息持久化
     persistence-enabled: true
     # 是否启用摘要压缩(hybrid策略)
-    summarize-enabled: false
+    summarize-enabled: true
+    # 触发摘要的Token使用比例(0.7=70%)
+    summarize-token-ratio: 0.7
     # 触发摘要的消息数阈值
-    summarize-threshold: 30
+    summarize-threshold: 10
     # 是否保护系统消息不被截断
     preserve-system-messages: true
