@@ -3,6 +3,8 @@ package org.ruoyi.service.chat.impl.memory;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.util.List;
+
 /**
  * 聊天长期记忆配置属性
  * 支持通过 application.yml 配置长期记忆行为
@@ -112,6 +114,19 @@ public class ChatMemoryProperties {
     private Integer fallbackMaxMessages = 20;
 
     /**
+     * 是否使用策略框架（默认启用）
+     * 启用后，使用 CompressionStrategyManager 进行压缩
+     * 禁用后，使用原有硬编码逻辑
+     */
+    private Boolean useStrategyFramework = true;
+
+    /**
+     * 启用的压缩策略列表（默认启用摘要和截断）
+     * 可选值: summarization, truncation, sliding-window
+     */
+    private List<String> enabledStrategies = List.of("summarization", "truncation");
+
+    /**
      * 获取格式化的配置信息
      */
     @Override
@@ -133,6 +148,8 @@ public class ChatMemoryProperties {
                 ", maxConcurrentMemories=" + maxConcurrentMemories +
                 ", fallbackToMessageStrategy=" + fallbackToMessageStrategy +
                 ", fallbackMaxMessages=" + fallbackMaxMessages +
+                ", useStrategyFramework=" + useStrategyFramework +
+                ", enabledStrategies=" + enabledStrategies +
                 '}';
     }
 }

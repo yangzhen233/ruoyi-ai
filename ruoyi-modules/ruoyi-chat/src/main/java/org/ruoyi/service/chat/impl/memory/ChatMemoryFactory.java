@@ -7,6 +7,7 @@ import dev.langchain4j.store.memory.chat.ChatMemoryStore;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.ruoyi.common.chat.domain.vo.chat.ChatModelVo;
+import org.ruoyi.service.chat.impl.memory.strategy.CompressionStrategyManager;
 import org.springframework.stereotype.Component;
 
 /**
@@ -24,6 +25,7 @@ public class ChatMemoryFactory {
     private final ChatMemoryProperties properties;
     private final PersistentChatMemoryStore persistentStore;
     private final TokenCounter tokenCounter;
+    private final CompressionStrategyManager strategyManager;
 
     /**
      * 创建 ChatMemory 实例
@@ -121,6 +123,10 @@ public class ChatMemoryFactory {
                 maxTokens, reservedForReply, model != null ? model.getModelName() : "未知",
                 summarizeEnabled, summarizeTokenRatio);
 
+        // 判断是否使用策略框架
+        boolean useStrategyFramework = properties.getUseStrategyFramework() != null
+                ? properties.getUseStrategyFramework() : true;
+
         return TokenBasedChatMemory.builder()
             .memoryId(memoryId)
             .maxTokens(maxTokens)
@@ -132,6 +138,7 @@ public class ChatMemoryFactory {
             .summarizer(summarizer)
             .preserveSystemMessages(properties.getPreserveSystemMessages())
             .reservedForReply(reservedForReply)
+            .strategyManager(useStrategyFramework ? strategyManager : null)
             .build();
     }
 
@@ -149,6 +156,10 @@ public class ChatMemoryFactory {
         log.info("[Hybrid内存] 创建混合策略内存: maxTokens={}, summarizeEnabled={}, summarizeTokenRatio={}, summarizeThreshold={}",
             maxTokens, summarizeEnabled, summarizeTokenRatio, summarizeThreshold);
 
+        // 判断是否使用策略框架
+        boolean useStrategyFramework = properties.getUseStrategyFramework() != null
+                ? properties.getUseStrategyFramework() : true;
+
         return TokenBasedChatMemory.builder()
             .memoryId(memoryId)
             .maxTokens(maxTokens)
@@ -160,6 +171,7 @@ public class ChatMemoryFactory {
             .summarizer(summarizer)
             .preserveSystemMessages(properties.getPreserveSystemMessages())
             .reservedForReply(reservedForReply)
+            .strategyManager(useStrategyFramework ? strategyManager : null)
             .build();
     }
 

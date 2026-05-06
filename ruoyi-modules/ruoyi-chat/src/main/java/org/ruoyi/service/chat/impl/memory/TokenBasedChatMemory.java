@@ -10,6 +10,9 @@ import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.store.memory.chat.ChatMemoryStore;
 import lombok.extern.slf4j.Slf4j;
 import org.ruoyi.common.chat.domain.vo.chat.ChatModelVo;
+import org.ruoyi.service.chat.impl.memory.strategy.CompressionContext;
+import org.ruoyi.service.chat.impl.memory.strategy.CompressionResult;
+import org.ruoyi.service.chat.impl.memory.strategy.CompressionStrategyManager;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -77,6 +80,12 @@ public class TokenBasedChatMemory implements ChatMemory {
     private final int reservedForReply;
 
     /**
+     * 压缩策略管理器（可选）
+     * 如果设置，优先使用策略管理器进行压缩
+     */
+    private final CompressionStrategyManager strategyManager;
+
+    /**
      * 构造函数
      */
     private TokenBasedChatMemory(Builder builder) {
@@ -90,6 +99,7 @@ public class TokenBasedChatMemory implements ChatMemory {
         this.summarizer = builder.summarizer;
         this.preserveSystemMessages = builder.preserveSystemMessages;
         this.reservedForReply = builder.reservedForReply;
+        this.strategyManager = builder.strategyManager;
     }
 
     @Override
@@ -127,6 +137,46 @@ public class TokenBasedChatMemory implements ChatMemory {
 
         log.info("Token 数量 {} 超过限制 {}，开始处理", totalTokens, effectiveMaxTokens);
 
+        // 优先使用策略管理器
+        if (strategyManager != null) {
+            CompressionContext context = buildCompressionContext(messages, totalTokens);
+            CompressionResult result = strategyManager.execute(context);
+            if (result.isSuccess()) {
+                log.info("[策略框架] 压缩成功: 策略={}, Token: {} → {}, 消息数: {} → {}",
+                        result.getStrategyName(), result.getOriginalTokens(), result.getCompressedTokens(),
+                        result.getOriginalMessageCount(), result.getCompressedMessageCount());
+                return result.getMessages();
+            } else {
+                log.warn("[策略框架] 压缩失败: {}, 回退到原有逻辑", result.getErrorMessage());
+            }
+        }
+
+        // 回退到原有逻辑
+        return legacyCompress(messages, totalTokens, effectiveMaxTokens);
+    }
+
+    /**
+     * 构建压缩上下文
+     */
+    private CompressionContext buildCompressionContext(List<ChatMessage> messages, int totalTokens) {
+        return CompressionContext.builder()
+                .memoryId(memoryId)
+                .messages(messages)
+                .currentTokens(totalTokens)
+                .maxTokens(maxTokens)
+                .reservedForReply(reservedForReply)
+                .summarizer(summarizer)
+                .tokenCounter(tokenCounter)
+                .preserveSystemMessages(preserveSystemMessages)
+                .summarizeTokenRatio(summarizeTokenRatio)
+                .summarizeThreshold(summarizeThreshold)
+                .build();
+    }
+
+    /**
+     * 原有压缩逻辑（回退方案）
+     */
+    private List<ChatMessage> legacyCompress(List<ChatMessage> messages, int totalTokens, int effectiveMaxTokens) {
         // 尝试摘要压缩
         // 条件: 1. 启用摘要 2. 有摘要模型 3. 消息数足够 4. Token 使用超过阈值比例
         boolean shouldSummarize = summarizeEnabled
@@ -332,6 +382,28 @@ public class TokenBasedChatMemory implements ChatMemory {
     }
 
     /**
+     * 从模型配置创建（带策略管理器）
+     */
+    public static TokenBasedChatMemory fromModel(Object memoryId, ChatModelVo model,
+                                                   ChatMemoryStore store, ChatModel summarizer,
+                                                   CompressionStrategyManager strategyManager) {
+        int maxTokens = ModelTokenLimits.getLimit(model.getModelName());
+        int inputLimit = ModelTokenLimits.getInputLimit(model.getModelName(), 2000);
+
+        return builder()
+            .memoryId(memoryId)
+            .maxTokens(inputLimit)
+            .store(store)
+            .summarizer(summarizer)
+            .summarizeEnabled(false) // 默认关闭摘要
+            .summarizeThreshold(30)
+            .preserveSystemMessages(true)
+            .reservedForReply(2000)
+            .strategyManager(strategyManager)
+            .build();
+    }
+
+    /**
      * 构建器
      */
     public static class Builder {
@@ -345,6 +417,7 @@ public class TokenBasedChatMemory implements ChatMemory {
         private ChatModel summarizer;
         private boolean preserveSystemMessages = true;
         private int reservedForReply = 2000;
+        private CompressionStrategyManager strategyManager;
 
         public Builder memoryId(Object memoryId) {
             this.memoryId = memoryId;
@@ -393,6 +466,11 @@ public class TokenBasedChatMemory implements ChatMemory {
 
         public Builder reservedForReply(int reservedForReply) {
             this.reservedForReply = reservedForReply;
+            return this;
+        }
+
+        public Builder strategyManager(CompressionStrategyManager strategyManager) {
+            this.strategyManager = strategyManager;
             return this;
         }
 
